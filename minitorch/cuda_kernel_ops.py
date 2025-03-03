@@ -22,6 +22,8 @@ import pycuda.autoinit
 import pycuda.driver as cuda
 import torch
 
+# from minitorch.cuda_kernels.softmax_kernel import launch_attn_softmax_bw
+
 # Load the shared library
 lib = ctypes.CDLL("minitorch/cuda_kernels/combine.so")
 lib_softmax = ctypes.CDLL("minitorch/cuda_kernels/softmax_kernel.so")
@@ -46,7 +48,7 @@ fn_map = {
   operators.inv_back: 14,
   operators.is_close: 15,
   operators.max: 16,
-  operators.pow: 17, 
+  operators.pow: 17,
   operators.tanh: 18
 }
 
@@ -76,7 +78,7 @@ class CudaKernelOps(TensorOps):
             ]
 
             lib.tensorMap.restype = None
-            
+
             # assert out.size == a.size, f"zip {out.size}, {a.size}"
 
             lib.tensorMap(
@@ -321,7 +323,7 @@ class CudaKernelOps(TensorOps):
             a = a.contiguous().view(np.prod(a.shape[:-2]), a.shape[-2], a.shape[-1])
         if len(b.shape) > 3:
             b = b.contiguous().view(np.prod(b.shape[:-2]), b.shape[-2], b.shape[-1])
-        
+
         assert a.shape[0] == b.shape[0]
         assert a.shape[0] == out.shape[0]
 
@@ -399,14 +401,19 @@ class CudaKernelOps(TensorOps):
         to_len,
         is_dec_self_attn,
         stream
-      ) 
+      )
 
       return inp
 
     @staticmethod
     def attn_softmax_bw(out_grad: Tensor, soft_inp: Tensor):
       #   BEGIN ASSIGN3_1
-      raise("Not implemented")
+        rows, softmax_len = soft_inp.shape
+        inp_grad = torch.empty_like(out_grad, device=out_grad.device)
+        stream = torch.cuda.current_stream().cuda_stream
+        launch_attn_softmax_bw(inp_grad.data_ptr(), soft_inp.data_ptr(), rows, softmax_len, stream)
+
+        return inp_grad
       #   END ASSIGN3_1
 
     @staticmethod
@@ -414,10 +421,10 @@ class CudaKernelOps(TensorOps):
       #   BEGIN ASSIGN3_2
       raise("Not implemented")
       #   END ASSIGN3_2
-      
+
     @staticmethod
     def layernorm_bw(out_grad: Tensor, inp: Tensor, gamma: Tensor, beta: Tensor, var: Tensor, mean: Tensor):
       #   BEGIN ASSIGN3_2
       raise("Not implemented")
       #   END ASSIGN3_2
-      
+
