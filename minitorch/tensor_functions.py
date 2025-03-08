@@ -419,7 +419,7 @@ class Attn_Softmax(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, mask: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_1
-        out = inp.clone()
+        out = inp
         minitorch.cuda_kernel_ops.CudaKernelOps.attn_softmax_fw(out, mask)
         ctx.save_for_backward(out)
 
