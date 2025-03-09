@@ -431,8 +431,7 @@ class Attn_Softmax(Function):
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_1
         (soft_out,) = ctx.saved_tensors
-        inp_grad = out_grad.zeros(out_grad.shape)
-        minitorch.cuda_kernel_ops.CudaKernelOps.attn_softmax_bw(inp_grad, soft_out, out_grad)
+        inp_grad = minitorch.cuda_kernel_ops.CudaKernelOps.attn_softmax_bw(out_grad, soft_out)
 
         return inp_grad
       #   raise NotImplementedError("Need to implement for Assignment 3")
