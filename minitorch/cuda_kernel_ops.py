@@ -411,7 +411,7 @@ class CudaKernelOps(TensorOps):
         rows, softmax_len = soft_inp.shape
         inp_grad = torch.empty_like(out_grad, device=out_grad.device)
         stream = torch.cuda.current_stream().cuda_stream
-        launch_attn_softmax_bw(inp_grad.data_ptr(), soft_inp.data_ptr(), rows, softmax_len, stream)
+        lib_softmax.launch_attn_softmax_bw(inp_grad.data_ptr(), soft_inp.data_ptr(), rows, softmax_len, stream)
 
         return inp_grad
       #   END ASSIGN3_1
