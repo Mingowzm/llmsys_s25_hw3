@@ -433,7 +433,7 @@ class CudaKernelOps(TensorOps):
             stream
         )
 
-        return inp_grad
+        return inp_grad.view(batch_size, nhead, from_len, to_len)
       # raise("Not implemented")
       #   END ASSIGN3_1
 
