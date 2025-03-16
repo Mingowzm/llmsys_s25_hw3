@@ -219,9 +219,9 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
 
       if (means != nullptr) {
         float mean_val = means[row_idx];
-      float variance_val = vars[row_idx];
-      float rsqrt_var = rsqrtf(variance_val);
-      x_hat = (inp_val - mean_val) * rsqrt_var;
+        float variance_val = vars[row_idx];
+        float rsqrt_var = rsqrtf(variance_val);
+        x_hat = (inp_val - mean_val) * rsqrt_var;
       } else {
         float betta_val = betta[col_idx];
         float gamma_val = gamma[col_idx];
@@ -305,7 +305,7 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 4. Compute final gradient
 
   int row_idx = blockIdx.x;
-  
+
   float mean_val;
   if (means != nullptr) {
       mean_val = means[row_idx];
