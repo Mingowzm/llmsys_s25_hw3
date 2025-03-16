@@ -205,15 +205,80 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
   cg::thread_block b = cg::this_thread_block();
   cg::thread_block_tile<TILE_DIM> g = cg::tiled_partition<TILE_DIM>(b);
 
+  int col_id = blockIdx.x * TILE_DIM + threadIdx.x;
+  if (col_id >= width) {
+    return;
+  }
+
   // Step 1
+  float local_dbeta = 0.f;
+  float local_dgamma = 0.f;
+
+  for (int row_i = threadIdx.y; row_i < rows; row_i += blockDim.y) {
+    float dout_val = static_cast<float>(out_grad[row_i * width + col_id]);
+
+    float xhat_val;
+    if (means && vars) {
+      float mean_val = static_cast<float>(means[row_i]);
+      float var_val = static_cast<float>(vars[row_i]);
+      float inv_std = rsqrtf(var_val + 1e-12f); // safe-guard
+      float in_val = static_cast<float>(inp[row_i * width + col_id]);
+      xhat_val = (in_val - mean_val) * inv_std;
+    } else {
+      float y_val = static_cast<float>(inp[row_i * width + col_id]);
+      float g_val = static_cast<float>(gamma[col_id]);
+      float b_val = static_cast<float>(betta[col_id]);
+      xhat_val = (y_val - b_val) / (g_val + 1e-12f);
+    }
+
+    local_dbeta += dout_val;
+    local_dgamma += (dout_val * xhat_val);
+  }
 
   // Step 2
+  betta_buffer[threadIdx.y][threadIdx.x] = local_dbeta;
+  gamma_buffer[threadIdx.y][threadIdx.x] = local_dgamma;
+
+  __syncthreads();
+
+  // Step 3: block-wide reduce of betta_buffer and gamma_buffer over blockDim.y
+  // reduce along the y-dimension
+  for (int stride = blockDim.y / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.y < stride) {
+      betta_buffer[threadIdx.y][threadIdx.x] +=
+          betta_buffer[threadIdx.y + stride][threadIdx.x];
+      gamma_buffer[threadIdx.y][threadIdx.x] +=
+          gamma_buffer[threadIdx.y + stride][threadIdx.x];
+    }
+    __syncthreads();
+  }
 
   // Step 3
+  for (int stride = blockDim.y / 2; stride > 0; stride >>= 1) {
+    if (threadIdx.y < stride) {
+      betta_buffer[threadIdx.y][threadIdx.x] +=
+          betta_buffer[threadIdx.y + stride][threadIdx.x];
+      gamma_buffer[threadIdx.y][threadIdx.x] +=
+          gamma_buffer[threadIdx.y + stride][threadIdx.x];
+    }
+    __syncthreads();
+  }
+
+  float d_beta_final = betta_buffer[0][threadIdx.x];
+  float d_gamma_final = gamma_buffer[0][threadIdx.x];
+
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    d_beta_final += g.shfl_down(d_beta_final, offset);
+    d_gamma_final += g.shfl_down(d_gamma_final, offset);
+  }
 
   // Step 4
+  if (g.thread_rank() == 0) {
+    int global_col = blockIdx.x;
+    gamma_grad[global_col * 32] = d_gamma_final;
+    betta_grad[global_col * 32] = d_beta_final;
+  }
 
-  assert(false && "Not Implemented");
   /// END ASSIGN3_2
 }
 
@@ -260,15 +325,58 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 3. Compute reduce sum for dxhat and dxhat*xhat with blockReduce
   // 4. Compute final gradient
 
+  int row_id = blockIdx.x;
+  int tid = threadIdx.x;
+  if (tid >= hidden_dim) return;
+
   // Step 1
+  float dy_val = static_cast<float>(out_grad[row_id * hidden_dim + tid]);
+  float gamma_val = static_cast<float>(gamma[tid]);
+  float dxhat = dy_val * gamma_val;
 
   // Step 2
+  float xhat_val;
+  if (means) {
+    float mean_val = static_cast<float>(means[row_id]);
+    float var_val = static_cast<float>(vars[row_id]);
+    float inv_std = rsqrtf(var_val + 1e-12f);
+    float in_val = static_cast<float>(inp[row_id * hidden_dim + tid]);
+    xhat_val = (in_val - mean_val) * inv_std;
+  } else {
+    float y_val = static_cast<float>(inp[row_id * hidden_dim + tid]);
+    float betta_v = static_cast<float>(betta[tid]);
+    xhat_val = (y_val - betta_v) / (gamma_val + 1e-12f);
+  }
 
   // Step 3
+  __shared__ float s_dxhat[1024];
+  __shared__ float s_dxhat_xhat[1024];
+  s_dxhat[tid] = dxhat;
+  s_dxhat_xhat[tid] = dxhat * xhat_val;
+
+  __syncthreads();
+
+  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      s_dxhat[tid] += s_dxhat[tid + stride];
+      s_dxhat_xhat[tid] += s_dxhat_xhat[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  float sum_dxhat = s_dxhat[0];
+  float sum_dxhat_xhat = s_dxhat_xhat[0];
 
   // Step 4
+  float var_val = static_cast<float>(vars[row_id]);
+  float inv_std = rsqrtf(var_val + 1e-12f);
+  float term = (sum_dxhat + xhat_val * sum_dxhat_xhat) / (float)hidden_dim;
+  float dinp = (dxhat - term) * inv_std;
 
-  assert(false && "Not Implemented");
+  inp_grad[row_id * hidden_dim + tid] = (T)dinp;
+
+
+
   /// END ASSIGN3_2
 }
 extern "C" {
