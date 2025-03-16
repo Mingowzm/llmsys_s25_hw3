@@ -199,86 +199,60 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
   //      -> Now g.shfl_down helps you do so without consuming any shared memory. g.shfl_down makes it more efficient.
   // 4. Assign the final result to the correct position in the global output
 
-  __shared__ float betta_buffer[TILE_DIM][TILE_DIM];
-  __shared__ float gamma_buffer[TILE_DIM][TILE_DIM];
+  __shared__ float betta_partial_sum[TILE_DIM][TILE_DIM];
+  __shared__ float gamma_partial_sum[TILE_DIM][TILE_DIM];
 
-  cg::thread_block b = cg::this_thread_block();
-  cg::thread_block_tile<TILE_DIM> g = cg::tiled_partition<TILE_DIM>(b);
+  cg::thread_block block = cg::this_thread_block();
+  cg::thread_block_tile<TILE_DIM> tile = cg::tiled_partition<TILE_DIM>(block);
 
-  int col_id = blockIdx.x * TILE_DIM + threadIdx.x;
-  if (col_id >= width) {
-    return;
-  }
+  betta_partial_sum[threadIdx.y][threadIdx.x] = 0.0f;
+  gamma_partial_sum[threadIdx.y][threadIdx.x] = 0.0f;
 
-  // Step 1
-  float local_dbeta = 0.f;
-  float local_dgamma = 0.f;
+  int col_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-  for (int row_i = threadIdx.y; row_i < rows; row_i += blockDim.y) {
-    float dout_val = static_cast<float>(out_grad[row_i * width + col_id]);
+  if (col_idx < width) {
+    for (int row_idx = threadIdx.y; row_idx < rows; row_idx += blockDim.y) {
+      int data_idx = row_idx * width + col_idx;
+      float grad_out_val = out_grad[data_idx];
+      float x_hat;
 
-    float xhat_val;
-    if (means && vars) {
-      float mean_val = static_cast<float>(means[row_i]);
-      float var_val = static_cast<float>(vars[row_i]);
-      float inv_std = rsqrtf(var_val + 1e-12f); 
-      float in_val = static_cast<float>(inp[row_i * width + col_id]);
-      xhat_val = (in_val - mean_val) * inv_std;
-    } else {
-      float y_val = static_cast<float>(inp[row_i * width + col_id]);
-      float g_val = static_cast<float>(gamma[col_id]);
-      float b_val = static_cast<float>(betta[col_id]);
-      xhat_val = (y_val - b_val) / (g_val + 1e-12f);
+      if (means != nullptr) {
+        float mean_val = means[row_idx];
+        float variance_val = vars[row_idx];
+        float rsqrt_var = rsqrtf(variance_val);
+        x_hat = (inp[data_idx] - mean_val) * rsqrt_var;
+      } else {
+        float betta_val = betta[col_idx];
+        float gamma_val = gamma[col_idx];
+        x_hat = (inp[data_idx] - betta_val) / gamma_val;
+      }
+
+      betta_partial_sum[threadIdx.y][threadIdx.x] += grad_out_val;
+      gamma_partial_sum[threadIdx.y][threadIdx.x] += grad_out_val * x_hat;
     }
-
-    local_dbeta += dout_val;
-    local_dgamma += (dout_val * xhat_val);
   }
-
-  // Step 2
-  betta_buffer[threadIdx.y][threadIdx.x] = local_dbeta;
-  gamma_buffer[threadIdx.y][threadIdx.x] = local_dgamma;
 
   __syncthreads();
 
-  // Step 3: block-wide reduce of betta_buffer and gamma_buffer over blockDim.y
-  // reduce along the y-dimension
-  for (int stride = blockDim.y / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.y < stride) {
-      betta_buffer[threadIdx.y][threadIdx.x] +=
-          betta_buffer[threadIdx.y + stride][threadIdx.x];
-      gamma_buffer[threadIdx.y][threadIdx.x] +=
-          gamma_buffer[threadIdx.y + stride][threadIdx.x];
+  __shared__ float s_betta_reduction[TILE_DIM];
+  __shared__ float s_gamma_reduction[TILE_DIM];
+
+  if (threadIdx.y == 0) {
+    s_betta_reduction[threadIdx.x] = 0.0f;
+    s_gamma_reduction[threadIdx.x] = 0.0f;
+
+    for (int y = 0; y < TILE_DIM; y++) {
+      s_betta_reduction[threadIdx.x] += betta_partial_sum[y][threadIdx.x];
+      s_gamma_reduction[threadIdx.x] += gamma_partial_sum[y][threadIdx.x];
     }
-    __syncthreads();
   }
 
-  // Step 3
-  for (int stride = blockDim.y / 2; stride > 0; stride >>= 1) {
-    if (threadIdx.y < stride) {
-      betta_buffer[threadIdx.y][threadIdx.x] +=
-          betta_buffer[threadIdx.y + stride][threadIdx.x];
-      gamma_buffer[threadIdx.y][threadIdx.x] +=
-          gamma_buffer[threadIdx.y + stride][threadIdx.x];
-    }
-    __syncthreads();
+  __syncthreads();
+
+  if (threadIdx.y == 0 && col_idx < width) {
+    betta_grad[col_idx] = s_betta_reduction[threadIdx.x];
+    gamma_grad[col_idx] = s_gamma_reduction[threadIdx.x];
   }
-
-  float d_beta_final = betta_buffer[0][threadIdx.x];
-  float d_gamma_final = gamma_buffer[0][threadIdx.x];
-
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    d_beta_final += g.shfl_down(d_beta_final, offset);
-    d_gamma_final += g.shfl_down(d_gamma_final, offset);
-  }
-
-  // Step 4
-  if (g.thread_rank() == 0) {
-    int global_col = blockIdx.x;
-    gamma_grad[global_col * 32] = d_gamma_final;
-    betta_grad[global_col * 32] = d_beta_final;
-  }
-
   /// END ASSIGN3_2
 }
 
@@ -325,57 +299,112 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 3. Compute reduce sum for dxhat and dxhat*xhat with blockReduce
   // 4. Compute final gradient
 
-  int row_id = blockIdx.x;
-  int tid = threadIdx.x;
-  if (tid >= hidden_dim) return;
+  int row_idx = blockIdx.x;
+  float mean_val = (means != nullptr) ? means[row_idx] : 0.0f;
+  float variance_val = vars[row_idx];
+  float inv_std_dev = rsqrtf(variance_val);
 
   // Step 1
-  float dy_val = static_cast<float>(out_grad[row_id * hidden_dim + tid]);
-  float gamma_val = static_cast<float>(gamma[tid]);
-  float dxhat = dy_val * gamma_val;
+  float local_dxhat_sum = 0.0f;
+  float local_dxhat_xhat_sum = 0.0f;
+  const float4 *inp_vec = reinterpret_cast<const float4 *>(inp) + row_idx * hidden_dim;
+  const float4 *gamma_vec = reinterpret_cast<const float4 *>(gamma);
+  const float4 *betta_vec = (betta != nullptr) ? reinterpret_cast<const float4 *>(betta) : nullptr;
+  const float4 *out_grad_vec = reinterpret_cast<const float4 *>(out_grad) + row_idx * hidden_dim;
+  float4 *inp_grad_vec = reinterpret_cast<float4 *>(inp_grad) + row_idx * hidden_dim;
+
+  for (int idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
+    float4 grad_out_val = out_grad_vec[idx];
+    float4 gamma_val = gamma_vec[idx];
+    float4 inp_val = inp_vec[idx];
+
+    float4 betta_val;
+    if (betta_vec != nullptr) {
+      betta_val = betta_vec[idx];
+    } else {
+      betta_val = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    float4 dxhat;
+    dxhat.x = grad_out_val.x * gamma_val.x;
+    dxhat.y = grad_out_val.y * gamma_val.y;
+    dxhat.z = grad_out_val.z * gamma_val.z;
+    dxhat.w = grad_out_val.w * gamma_val.w;
+
+    float4 xhat;
+    if (means != nullptr) {
+      xhat.x = (inp_val.x - mean_val) * inv_std_dev;
+      xhat.y = (inp_val.y - mean_val) * inv_std_dev;
+      xhat.z = (inp_val.z - mean_val) * inv_std_dev;
+      xhat.w = (inp_val.w - mean_val) * inv_std_dev;
+    } else {
+      xhat.x = (inp_val.x - betta_val.x) / gamma_val.x;
+      xhat.y = (inp_val.y - betta_val.y) / gamma_val.y;
+      xhat.z = (inp_val.z - betta_val.z) / gamma_val.z;
+      xhat.w = (inp_val.w - betta_val.w) / gamma_val.w;
+    }
+
+    local_dxhat_sum += dxhat.x + dxhat.y + dxhat.z + dxhat.w;
+    local_dxhat_xhat_sum += dxhat.x * xhat.x + dxhat.y * xhat.y + dxhat.z * xhat.z + dxhat.w * xhat.w;
+  }
 
   // Step 2
-  float xhat_val;
-  if (means) {
-    float mean_val = static_cast<float>(means[row_id]);
-    float var_val = static_cast<float>(vars[row_id]);
-    float inv_std = rsqrtf(var_val + 1e-12f);
-    float in_val = static_cast<float>(inp[row_id * hidden_dim + tid]);
-    xhat_val = (in_val - mean_val) * inv_std;
-  } else {
-    float y_val = static_cast<float>(inp[row_id * hidden_dim + tid]);
-    float betta_v = static_cast<float>(betta[tid]);
-    xhat_val = (y_val - betta_v) / (gamma_val + 1e-12f);
+  blockReduce<ReduceType::kSum, 1>(&local_dxhat_sum);
+  blockReduce<ReduceType::kSum, 1>(&local_dxhat_xhat_sum);
+
+  __shared__ float shared_dxhat_sum;
+  __shared__ float shared_dxhat_xhat_sum;
+
+  if (threadIdx.x == 0) {
+    shared_dxhat_sum = local_dxhat_sum;
+    shared_dxhat_xhat_sum = local_dxhat_xhat_sum;
   }
-
-  // Step 3
-  __shared__ float s_dxhat[1024];
-  __shared__ float s_dxhat_xhat[1024];
-  s_dxhat[tid] = dxhat;
-  s_dxhat_xhat[tid] = dxhat * xhat_val;
-
   __syncthreads();
 
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      s_dxhat[tid] += s_dxhat[tid + stride];
-      s_dxhat_xhat[tid] += s_dxhat_xhat[tid + stride];
+  // Step 3
+  const float scale_factor = 1.0f / (hidden_dim * 4);
+
+  for (int idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
+    float4 grad_out_val = out_grad_vec[idx];
+    float4 gamma_val = gamma_vec[idx];
+    float4 inp_val = inp_vec[idx];
+
+    float4 betta_val;
+    if (betta_vec != nullptr) {
+      betta_val = betta_vec[idx];
+    } else {
+      betta_val = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
-    __syncthreads();
+
+    float4 dxhat;
+    dxhat.x = grad_out_val.x * gamma_val.x;
+    dxhat.y = grad_out_val.y * gamma_val.y;
+    dxhat.z = grad_out_val.z * gamma_val.z;
+    dxhat.w = grad_out_val.w * gamma_val.w;
+
+    float4 xhat;
+    if (means != nullptr) {
+      xhat.x = (inp_val.x - mean_val) * inv_std_dev;
+      xhat.y = (inp_val.y - mean_val) * inv_std_dev;
+      xhat.z = (inp_val.z - mean_val) * inv_std_dev;
+      xhat.w = (inp_val.w - mean_val) * inv_std_dev;
+    } else {
+      xhat.x = (inp_val.x - betta_val.x) / gamma_val.x;
+      xhat.y = (inp_val.y - betta_val.y) / gamma_val.y;
+      xhat.z = (inp_val.z - betta_val.z) / gamma_val.z;
+      xhat.w = (inp_val.w - betta_val.w) / gamma_val.w;
+    }
+
+    float4 final_grad;
+    final_grad.x = (dxhat.x - (shared_dxhat_sum + xhat.x * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
+    final_grad.y = (dxhat.y - (shared_dxhat_sum + xhat.y * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
+    final_grad.z = (dxhat.z - (shared_dxhat_sum + xhat.z * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
+    final_grad.w = (dxhat.w - (shared_dxhat_sum + xhat.w * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
+    inp_grad_vec[idx] = final_grad;
   }
-
-  float sum_dxhat = s_dxhat[0];
-  float sum_dxhat_xhat = s_dxhat_xhat[0];
-
-  // Step 4
-  float var_val = static_cast<float>(vars[row_id]);
-  float inv_std = rsqrtf(var_val + 1e-12f);
-  float term = (sum_dxhat + xhat_val * sum_dxhat_xhat) / (float)hidden_dim;
-  float dinp = (dxhat - term) * inv_std;
-
-  inp_grad[row_id * hidden_dim + tid] = (T)dinp;
   /// END ASSIGN3_2
 }
+
 extern "C" {
 void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
                          const float *out_grad, const float *inp, const float *gamma,
