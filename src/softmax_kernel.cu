@@ -397,7 +397,7 @@ void launch_attn_softmax_bw(float *out_grad,
   }
 
   // Copy results back to host
-  cudaMemcpy(out_grad, d_out_grad, out_grad_size, cudaMemcpyDeviceToHost);
+  cudaMemcpy(out_grad, d_out_grad, data_size, cudaMemcpyDeviceToHost);
   cudaDeviceSynchronize();
 
   // Free device memory
