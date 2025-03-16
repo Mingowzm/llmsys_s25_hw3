@@ -214,21 +214,24 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
     for (int row_idx = threadIdx.y; row_idx < rows; row_idx += blockDim.y) {
       int data_idx = row_idx * width + col_idx;
       float grad_out_val = out_grad[data_idx];
+      float inp_val = inp[data_idx];
       float x_hat;
 
       if (means != nullptr) {
         float mean_val = means[row_idx];
-        float variance_val = vars[row_idx];
-        float rsqrt_var = rsqrtf(variance_val);
-        x_hat = (inp[data_idx] - mean_val) * rsqrt_var;
+      float variance_val = vars[row_idx];
+      float rsqrt_var = rsqrtf(variance_val);
+      x_hat = (inp_val - mean_val) * rsqrt_var;
       } else {
         float betta_val = betta[col_idx];
         float gamma_val = gamma[col_idx];
         x_hat = (inp[data_idx] - betta_val) / gamma_val;
       }
 
-      betta_partial_sum[threadIdx.y][threadIdx.x] += grad_out_val;
-      gamma_partial_sum[threadIdx.y][threadIdx.x] += grad_out_val * x_hat;
+      float betta_contrib = grad_out_val;
+      float gamma_contrib = grad_out_val * x_hat;
+      betta_partial_sum[threadIdx.y][threadIdx.x] += betta_contrib;
+      gamma_partial_sum[threadIdx.y][threadIdx.x] += gamma_contrib;
     }
   }
 
@@ -242,8 +245,10 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
     s_gamma_reduction[threadIdx.x] = 0.0f;
 
     for (int y = 0; y < TILE_DIM; y++) {
-      s_betta_reduction[threadIdx.x] += betta_partial_sum[y][threadIdx.x];
-      s_gamma_reduction[threadIdx.x] += gamma_partial_sum[y][threadIdx.x];
+      float partial_betta = betta_partial_sum[y][threadIdx.x];
+      float partial_gamma = gamma_partial_sum[y][threadIdx.x];
+      s_betta_reduction[threadIdx.x] += partial_betta;
+      s_gamma_reduction[threadIdx.x] += partial_gamma;
     }
   }
 
@@ -330,6 +335,7 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
     dxhat.y = grad_out_val.y * gamma_val.y;
     dxhat.z = grad_out_val.z * gamma_val.z;
     dxhat.w = grad_out_val.w * gamma_val.w;
+    local_dxhat_sum += dxhat.x + dxhat.y + dxhat.z + dxhat.w;
 
     float4 xhat;
     if (means != nullptr) {
@@ -344,7 +350,6 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
       xhat.w = (inp_val.w - betta_val.w) / gamma_val.w;
     }
 
-    local_dxhat_sum += dxhat.x + dxhat.y + dxhat.z + dxhat.w;
     local_dxhat_xhat_sum += dxhat.x * xhat.x + dxhat.y * xhat.y + dxhat.z * xhat.z + dxhat.w * xhat.w;
   }
 
@@ -362,7 +367,8 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   __syncthreads();
 
   // Step 3
-  const float scale_factor = 1.0f / (hidden_dim * 4);
+  int hidden_dims = hidden_dim * 4;
+  const float scale_factor = 1.0f / hidden_dims;
 
   for (int idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
     float4 grad_out_val = out_grad_vec[idx];
