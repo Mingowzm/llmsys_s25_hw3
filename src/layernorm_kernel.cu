@@ -45,53 +45,45 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   // 3. Compute layernorm result with reinterpret_cast by casting to float4 for speedup
 
   // Step 1
-  float l_sum = 0.f;
-  float l_sq_sum = 0.f;
-  const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;
+  float sum_x = 0.0f, sum_x_squared = 0.0f;
+  const float4 *inp_vec4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;
   for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
-    float4 val = inp_f4[idx];
-    l_sum += val.x + val.y + val.z + val.w;
+    float4 val = inp_vec4[idx];
+    sum_x += val.x + val.y + val.z + val.w;
+    sum_x_squared += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
   }
 
   // Step 2
-  blockReduceSum(&l_sum);
-  blockReduceSum(&l_sq_sum);
+  blockReduce<ReduceType::kSum, 1>(&sum_x);
+  blockReduce<ReduceType::kSum, 1>(&sum_x_squared);
 
-  __shared__ float s_mean, s_var;
+  __shared__ float shared_mean, shared_variance;
   if (threadIdx.x == 0) {
-    float mean = l_sum / (hidden_size * 4);
-    float var  = (l_sq_sum / (hidden_size * 4)) - mean * mean;
-
-    // Store back to global memory if pointers are not nullptr
-    if (vars != nullptr) vars[blockIdx.x] = var;
-    if (means != nullptr) means[blockIdx.x] = mean;
-
-    s_mean = mean;
-    s_var  = var;
+    shared_mean = sum_x / (hidden_size * 4);
+    shared_variance = (sum_x_squared / (hidden_size * 4)) - (shared_mean * shared_mean) + LN_EPSILON;
+    vars[blockIdx.x] = shared_variance;
+    if (means) means[blockIdx.x] = shared_mean;
   }
   __syncthreads();
 
   // Step 3
-  float mean  = s_mean;
-  float var   = s_var;
-  float rstd  = rsqrtf(var + LN_EPSILON);
-
-  float4 *ln_res_f4 = reinterpret_cast<float4 *>(ln_res) + blockIdx.x * hidden_size;
-  const float4 *scale_f4 = reinterpret_cast<const float4 *>(scale);
-  const float4 *bias_f4  = reinterpret_cast<const float4 *>(bias);
+  float inv_std_dev = rsqrtf(shared_variance);
+  float4 *ln_res_vec4 = reinterpret_cast<float4 *>(ln_res) + blockIdx.x * hidden_size;
+  const float4 *scale_vec4 = reinterpret_cast<const float4 *>(scale);
+  const float4 *bias_vec4 = reinterpret_cast<const float4 *>(bias);
 
   for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
-    float4 val       = inp_f4[idx];
-    float4 scale_val = scale_f4[idx];
-    float4 bias_val  = bias_f4[idx];
+    float4 val = inp_vec4[idx];
+    float4 scale_val = scale_vec4[idx];
+    float4 bias_val = bias_vec4[idx];
 
-    // y = [(x - mean) / sqrt(var + eps)] * gamma + beta
-    val.x = (val.x - mean) * rstd * scale_val.x + bias_val.x;
-    val.y = (val.y - mean) * rstd * scale_val.y + bias_val.y;
-    val.z = (val.z - mean) * rstd * scale_val.z + bias_val.z;
-    val.w = (val.w - mean) * rstd * scale_val.w + bias_val.w;
-
-    ln_res_f4[idx] = val;
+    ln_res_vec4[idx] = {
+      scale_val.x * ((val.x - shared_mean) * inv_std_dev) + bias_val.x,
+      scale_val.y * ((val.y - shared_mean) * inv_std_dev) + bias_val.y,
+      scale_val.z * ((val.z - shared_mean) * inv_std_dev) + bias_val.z,
+      scale_val.w * ((val.w - shared_mean) * inv_std_dev) + bias_val.w
+    };
+  }
 
   /// END ASSIGN3_2
 }

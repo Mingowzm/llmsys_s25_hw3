@@ -447,12 +447,12 @@ class CudaKernelOps(TensorOps):
         stream = torch.cuda.current_stream().cuda_stream
 
         lib_layernorm.launch_layernorm.argtypes = [
-            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
-            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
-            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
-            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
-            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
-            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
+            np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+            np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+            np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+            np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+            np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+            np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
             ctypes.c_int,
             ctypes.c_int,
             ctypes.c_void_p
@@ -461,7 +461,7 @@ class CudaKernelOps(TensorOps):
         lib_layernorm.launch_layernorm.restype = None
 
         lib_layernorm.launch_layernorm(
-            inp._tensor._storage,
+            out._tensor._storage,
             var._tensor._storage,
             mean._tensor._storage,
             inp._tensor._storage,
