@@ -481,11 +481,13 @@ class CudaKernelOps(TensorOps):
         batch_size = shape[0]
         hidden_dim = shape[-1]
 
-        gamma_grad = gamma.zeros(gamma.shape)
-        beta_grad = beta.zeros(beta.shape)
-        inp_grad = inp.zeros(shape)
+        d_gamma = gamma.zeros(gamma.shape)
+        d_beta = beta.zeros(beta.shape)
+        d_inp = inp.zeros(shape)
 
-        stream = torch.cuda.current_stream().cuda_stream
+        stream_1 = torch.cuda.Stream().cuda_stream
+        stream_2 = torch.cuda.Stream().cuda_stream
+
         lib_layernorm.launch_layernorm_bw.argtypes = [
             np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
             np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
@@ -505,22 +507,22 @@ class CudaKernelOps(TensorOps):
         lib_layernorm.launch_layernorm_bw.restype = None
 
         lib_layernorm.launch_layernorm_bw(
-            gamma_grad._tensor._storage,
-            beta_grad._tensor._storage,
-            inp_grad._tensor._storage,
+            d_gamma._tensor._storage,
+            d_beta._tensor._storage,
+            d_inp._tensor._storage,
             out_grad._tensor._storage,
             inp._tensor._storage,
             gamma._tensor._storage,
             beta._tensor._storage,
             var._tensor._storage,
-            mean._tensor._storage,
+            mean._tensor._storage
             batch_size,
             hidden_dim,
-            stream,
-            stream
+            stream_1,
+            stream_2
         )
 
-        return inp_grad, gamma_grad, beta_grad
+        return d_inp, d_gamma, d_beta
 
       #   END ASSIGN3_2
 

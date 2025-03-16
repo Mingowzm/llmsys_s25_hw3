@@ -449,7 +449,7 @@ class LayerNorm(Function):
         # ctx.save_for_backward(y, gamma, beta)
         # return y
         out, var, mean = inp.backend.layernorm_fw(inp, gamma, beta)
-        ctx.save_for_backward(out, gamma, beta, var, mean)
+        ctx.save_for_backward(inp.detach(), gamma, beta, var, mean)
         return out
       #   END ASSIGN3_2
 
