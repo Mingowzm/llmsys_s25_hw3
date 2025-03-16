@@ -471,9 +471,7 @@ class CudaKernelOps(TensorOps):
             stream
         )
 
-        out._var = var
-        out._mean = mean
-        return out
+        return out, var, mean
       #   END ASSIGN3_2
 
     @staticmethod

@@ -450,17 +450,15 @@ class LayerNorm(Function):
         # ctx.save_for_backward(y, gamma, beta)
         # return y
         out = inp.detach()
-        ctx.save_for_backward(out, gamma, beta)
-        return inp.backend.layernorm_fw(inp, gamma, beta)
+        out, var, mean = inp.backend.layernorm_fw(inp, gamma, beta)
+        ctx.save_for_backward(out, gamma, beta, var, mean)
+        return out
       #   END ASSIGN3_2
 
     @staticmethod
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_2
-        ln_out, gamma, beta = ctx.saved_values
-        var = ln_out._var
-        mean = ln_out._mean
-
+        ln_out, gamma, beta, var, mean = ctx.saved_values
         d_inp, d_gamma, d_beta = ln_out.backend.layernorm_bw(out_grad, ln_out, gamma, beta, var, mean)
         return d_inp, d_gamma, d_beta
       #   END ASSIGN3_2

@@ -221,7 +221,7 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
     if (means && vars) {
       float mean_val = static_cast<float>(means[row_i]);
       float var_val = static_cast<float>(vars[row_i]);
-      float inv_std = rsqrtf(var_val + 1e-12f); // safe-guard
+      float inv_std = rsqrtf(var_val + 1e-12f); 
       float in_val = static_cast<float>(inp[row_i * width + col_id]);
       xhat_val = (in_val - mean_val) * inv_std;
     } else {
@@ -374,9 +374,6 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   float dinp = (dxhat - term) * inv_std;
 
   inp_grad[row_id * hidden_dim + tid] = (T)dinp;
-
-
-
   /// END ASSIGN3_2
 }
 extern "C" {
