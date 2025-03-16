@@ -439,7 +439,41 @@ class CudaKernelOps(TensorOps):
     @staticmethod
     def layernorm_fw(inp: Tensor, gamma: Tensor, beta: Tensor):
       #   BEGIN ASSIGN3_2
-      raise("Not implemented")
+        shape = inp.shape
+        out = inp.zeros(shape)
+        var = inp.zeros((shape[0],))
+        mean = inp.zeros((shape[0],))
+
+        stream = torch.cuda.current_stream().cuda_stream
+
+        lib_layernorm.launch_layernorm.argtypes = [
+            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
+            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
+            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
+            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
+            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
+            np.ctypeslib.ndpointer(dtype=inp.dtype, ndim=1, flags='C_CONTIGUOUS'),
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_void_p
+        ]
+
+        lib_layernorm.launch_layernorm.restype = None
+
+        lib_layernorm.launch_layernorm(
+            inp._tensor._storage,
+            var._tensor._storage,
+            mean._tensor._storage,
+            inp._tensor._storage,
+            gamma._tensor._storage,
+            beta._tensor._storage,
+            shape[0],
+            shape[-1],
+            stream
+        )
+
+        return out
+
       #   END ASSIGN3_2
 
     @staticmethod

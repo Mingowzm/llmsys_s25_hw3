@@ -36,27 +36,63 @@ bias: [hidden_size], ln bias
 template <typename T>
 __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
                                const T *scale, const T *bias, int hidden_size) {
-  
+
   /// BEGIN ASSIGN3_2
   /// TODO
   // Hints:
   // 1. Compute x and x^2 with reinterpret_cast by casting to float4 for speedup
   // 2. Compute reduce sum with blockReduce and add epsilon with LN_EPSILON
   // 3. Compute layernorm result with reinterpret_cast by casting to float4 for speedup
-  
+
   // Step 1
-  float l_sum = 0;
-  const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;  
+  float l_sum = 0.f;
+  float l_sq_sum = 0.f;
+  const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;
   for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
     float4 val = inp_f4[idx];
     l_sum += val.x + val.y + val.z + val.w;
   }
 
   // Step 2
+  blockReduceSum(&l_sum);
+  blockReduceSum(&l_sq_sum);
+
+  __shared__ float s_mean, s_var;
+  if (threadIdx.x == 0) {
+    float mean = l_sum / (hidden_size * 4);
+    float var  = (l_sq_sum / (hidden_size * 4)) - mean * mean;
+
+    // Store back to global memory if pointers are not nullptr
+    if (vars != nullptr) vars[blockIdx.x] = var;
+    if (means != nullptr) means[blockIdx.x] = mean;
+
+    s_mean = mean;
+    s_var  = var;
+  }
+  __syncthreads();
 
   // Step 3
-  
-  assert(false && "Not Implemented");
+  float mean  = s_mean;
+  float var   = s_var;
+  float rstd  = rsqrtf(var + LN_EPSILON);
+
+  float4 *ln_res_f4 = reinterpret_cast<float4 *>(ln_res) + blockIdx.x * hidden_size;
+  const float4 *scale_f4 = reinterpret_cast<const float4 *>(scale);
+  const float4 *bias_f4  = reinterpret_cast<const float4 *>(bias);
+
+  for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
+    float4 val       = inp_f4[idx];
+    float4 scale_val = scale_f4[idx];
+    float4 bias_val  = bias_f4[idx];
+
+    // y = [(x - mean) / sqrt(var + eps)] * gamma + beta
+    val.x = (val.x - mean) * rstd * scale_val.x + bias_val.x;
+    val.y = (val.y - mean) * rstd * scale_val.y + bias_val.y;
+    val.z = (val.z - mean) * rstd * scale_val.z + bias_val.z;
+    val.w = (val.w - mean) * rstd * scale_val.w + bias_val.w;
+
+    ln_res_f4[idx] = val;
+
   /// END ASSIGN3_2
 }
 
@@ -167,7 +203,7 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
   // 3. Compute the reduce sum of the shared memory arrays with g.shfl_down
   //      -> More hints about `g.shfl_down`:
   //      -> https://developer.nvidia.com/blog/cooperative-groups/#:~:text=Using%20thread_block_tile%3A%3Ashfl_down()%20to%20simplify%20our%20warp%2Dlevel%20reduction%20does%20benefit%20our%20code%3A%20it%20simplifies%20it%20and%20eliminates%20the%20need%20for%20shared%20memory
-  //      -> The highlighted line gives you a conceptual understanding of what the g.shfl_down is doing. Usually, the threads inside a block need to load everything to shared memory and work together to reduce the result (like what you have implemented in the hw1 for reduce function). 
+  //      -> The highlighted line gives you a conceptual understanding of what the g.shfl_down is doing. Usually, the threads inside a block need to load everything to shared memory and work together to reduce the result (like what you have implemented in the hw1 for reduce function).
   //      -> Now g.shfl_down helps you do so without consuming any shared memory. g.shfl_down makes it more efficient.
   // 4. Assign the final result to the correct position in the global output
 
@@ -180,9 +216,9 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
   // Step 1
 
   // Step 2
-  
+
   // Step 3
-  
+
   // Step 4
 
   assert(false && "Not Implemented");
@@ -223,7 +259,7 @@ template <typename T>
 __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
                                const T *gamma, const T *betta, const T *vars,
                                const T *means, int hidden_dim) {
-  
+
   /// BEGIN ASSIGN3_2
   /// TODO
   // Hints:
@@ -231,15 +267,15 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 2. Compute xhat with reinterpret_cast by casting to float4 for speedup
   // 3. Compute reduce sum for dxhat and dxhat*xhat with blockReduce
   // 4. Compute final gradient
-  
+
   // Step 1
- 
+
   // Step 2
-   
+
   // Step 3
- 
+
   // Step 4
-  
+
   assert(false && "Not Implemented");
   /// END ASSIGN3_2
 }
@@ -249,7 +285,7 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
                          const float *betta, const float *vars,
                          const float *means, int batch_size, int hidden_dim,
                          cudaStream_t stream_1, cudaStream_t stream_2) {
-  
+
   // Allocate device memory
   float *d_gamma_grad, *d_betta_grad, *d_inp_grad, *d_out_grad, *d_inp, *d_gamma, *d_betta, *d_vars, *d_means;
   int grad_output_size = batch_size * hidden_dim * sizeof(float);
