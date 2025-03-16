@@ -358,6 +358,9 @@ void launch_attn_softmax_bw(float *out_grad,
     cudaMalloc((void **)&device_ptr, size);
     cudaMemcpy(device_ptr, host_ptr, size, cudaMemcpyHostToDevice);
   };
+  int data_size = rows * softmax_len * sizeof(float);
+  allocate_and_copy(d_out_grad, out_grad, data_size);
+  allocate_and_copy(d_soft_inp, soft_inp, data_size);
 
   // Launch kernel
   // launch kernels with different ITERATIONS based on softmax_len
