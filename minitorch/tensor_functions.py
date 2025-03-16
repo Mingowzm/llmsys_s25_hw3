@@ -423,8 +423,8 @@ class Attn_Softmax(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, mask: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_1
-        out = inp.detach()
-        ctx.save_for_backward(out, mask)
+        inp_copy = inp.detach()
+        ctx.save_for_backward(inp_copy, mask)
         return inp.backend.attn_softmax_fw(inp, mask)
 
       # raise NotImplementedError("Need to implement for Assignment 3")
@@ -449,8 +449,8 @@ class LayerNorm(Function):
         # y = inp.backend.layernorm_fw(inp, gamma, beta)
         # ctx.save_for_backward(y, gamma, beta)
         # return y
-        out = inp.detach()
-        out, var, mean = inp.backend.layernorm_fw(inp, gamma, beta)
+        inp_copy = inp.detach()
+        out, var, mean = inp.backend.layernorm_fw(inp_copy, gamma, beta)
         ctx.save_for_backward(out, gamma, beta, var, mean)
         return out
       #   END ASSIGN3_2
