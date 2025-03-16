@@ -411,7 +411,6 @@ class CudaKernelOps(TensorOps):
         batch_size, nhead, from_len, to_len = soft_inp.shape
         rows = batch_size * nhead * from_len
         softmax_len = to_len
-        inp_grad = out_grad.zeros(out_grad.shape)
 
         stream = torch.cuda.current_stream().cuda_stream
 
@@ -426,14 +425,14 @@ class CudaKernelOps(TensorOps):
 
         # Call CUDA kernel
         lib_softmax.launch_attn_softmax_bw(
-            inp_grad._tensor._storage,
+            out_grad._tensor._storage,
             soft_inp._tensor._storage,
             rows,
             softmax_len,
             stream
         )
 
-        return inp_grad.view(batch_size, nhead, from_len, to_len)
+        return out_grad
       # raise("Not implemented")
       #   END ASSIGN3_1
 
