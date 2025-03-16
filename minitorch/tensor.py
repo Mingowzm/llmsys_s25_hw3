@@ -425,7 +425,3 @@ class Tensor:
 
     def layernorm(self, gamma: Tensor, beta: Tensor) -> Tensor:
       return LayerNorm.apply(self, gamma, beta)
-
-    def clone(self) -> Tensor:
-        new_tensor_data = TensorData(self._tensor._storage.copy(), self._tensor.shape, self._tensor.strides)
-        return Tensor(new_tensor_data, backend=self.backend)
