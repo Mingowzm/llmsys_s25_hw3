@@ -305,7 +305,14 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 4. Compute final gradient
 
   int row_idx = blockIdx.x;
-  float mean_val = (means != nullptr) ? means[row_idx] : 0.0f;
+  
+  float mean_val;
+  if (means != nullptr) {
+      mean_val = means[row_idx];
+  } else {
+      mean_val = 0.0f;
+  }
+
   float variance_val = vars[row_idx];
   float inv_std_dev = rsqrtf(variance_val);
 
@@ -314,7 +321,14 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   float local_dxhat_xhat_sum = 0.0f;
   const float4 *inp_vec = reinterpret_cast<const float4 *>(inp) + row_idx * hidden_dim;
   const float4 *gamma_vec = reinterpret_cast<const float4 *>(gamma);
-  const float4 *betta_vec = (betta != nullptr) ? reinterpret_cast<const float4 *>(betta) : nullptr;
+
+  const float4 *betta_vec;
+  if (betta != nullptr) {
+      betta_vec = reinterpret_cast<const float4 *>(betta);
+  } else {
+      betta_vec = nullptr;
+  }
+
   const float4 *out_grad_vec = reinterpret_cast<const float4 *>(out_grad) + row_idx * hidden_dim;
   float4 *inp_grad_vec = reinterpret_cast<float4 *>(inp_grad) + row_idx * hidden_dim;
 
