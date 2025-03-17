@@ -47,10 +47,16 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   // Step 1
   float sum_x = 0.0f, sum_x_squared = 0.0f;
   const float4 *inp_vec4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;
-  for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
-    float4 val = inp_vec4[idx];
-    sum_x += val.x + val.y + val.z + val.w;
-    sum_x_squared += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
+  for (uint i = threadIdx.x; i < hidden_size; i += blockDim.x) {
+    float4 val = inp_vec4[i];
+    float val_x = val.x;
+    float val_y = val.y;
+    float val_z = val.z;
+    float val_w = val.w;
+    float sum_elements = val_x + val_y + val_z + val_w;
+    float sum_squares = val_x * val_x + val_y * val_y + val_z * val_z + val_w * val_w;
+    sum_x += sum_elements;
+    sum_x_squared += sum_squares;
   }
 
   // Step 2
@@ -59,8 +65,12 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
 
   __shared__ float shared_mean, shared_variance;
   if (threadIdx.x == 0) {
-    shared_mean = sum_x / (hidden_size * 4);
-    shared_variance = (sum_x_squared / (hidden_size * 4)) - (shared_mean * shared_mean) + LN_EPSILON;
+    float num_elements = hidden_size * 4;
+    float mean_numerator = sum_x;
+    shared_mean = mean_numerator / num_elements;
+    float variance_numerator = sum_x_squared / num_elements;
+    float mean_squared = shared_mean * shared_mean;
+    shared_variance = variance_numerator - mean_squared + LN_EPSILON;
     vars[blockIdx.x] = shared_variance;
     if (means) means[blockIdx.x] = shared_mean;
   }
@@ -72,17 +82,22 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   const float4 *scale_vec4 = reinterpret_cast<const float4 *>(scale);
   const float4 *bias_vec4 = reinterpret_cast<const float4 *>(bias);
 
-  for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
-    float4 val = inp_vec4[idx];
-    float4 scale_val = scale_vec4[idx];
-    float4 bias_val = bias_vec4[idx];
+  for (uint i = threadIdx.x; i < hidden_size; i += blockDim.x) {
+    float4 val = inp_vec4[i];
+    float4 scale_val = scale_vec4[i];
+    float4 bias_val = bias_vec4[i];
 
-    ln_res_vec4[idx] = {
-      scale_val.x * ((val.x - shared_mean) * inv_std_dev) + bias_val.x,
-      scale_val.y * ((val.y - shared_mean) * inv_std_dev) + bias_val.y,
-      scale_val.z * ((val.z - shared_mean) * inv_std_dev) + bias_val.z,
-      scale_val.w * ((val.w - shared_mean) * inv_std_dev) + bias_val.w
-    };
+    float norm_x = (val.x - shared_mean) * inv_std_dev;
+    float norm_y = (val.y - shared_mean) * inv_std_dev;
+    float norm_z = (val.z - shared_mean) * inv_std_dev;
+    float norm_w = (val.w - shared_mean) * inv_std_dev;
+
+    float res_x = scale_val.x * norm_x + bias_val.x;
+    float res_y = scale_val.y * norm_y + bias_val.y;
+    float res_z = scale_val.z * norm_z + bias_val.z;
+    float res_w = scale_val.w * norm_w + bias_val.w;
+
+    ln_res_vec4[i] = {res_x, res_y, res_z, res_w};
   }
 
   /// END ASSIGN3_2
@@ -332,14 +347,14 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   const float4 *out_grad_vec = reinterpret_cast<const float4 *>(out_grad) + row_idx * hidden_dim;
   float4 *inp_grad_vec = reinterpret_cast<float4 *>(inp_grad) + row_idx * hidden_dim;
 
-  for (int idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
-    float4 grad_out_val = out_grad_vec[idx];
-    float4 gamma_val = gamma_vec[idx];
-    float4 inp_val = inp_vec[idx];
+  for (int i = threadIdx.x; i < hidden_dim; i += blockDim.x) {
+    float4 grad_out_val = out_grad_vec[i];
+    float4 gamma_val = gamma_vec[i];
+    float4 inp_val = inp_vec[i];
 
     float4 betta_val;
     if (betta_vec != nullptr) {
-      betta_val = betta_vec[idx];
+      betta_val = betta_vec[i];
     } else {
       betta_val = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
@@ -384,14 +399,14 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   int hidden_dims = hidden_dim * 4;
   const float scale_factor = 1.0f / hidden_dims;
 
-  for (int idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
-    float4 grad_out_val = out_grad_vec[idx];
-    float4 gamma_val = gamma_vec[idx];
-    float4 inp_val = inp_vec[idx];
+  for (int i = threadIdx.x; i < hidden_dim; i += blockDim.x) {
+    float4 grad_out_val = out_grad_vec[i];
+    float4 gamma_val = gamma_vec[i];
+    float4 inp_val = inp_vec[i];
 
     float4 betta_val;
     if (betta_vec != nullptr) {
-      betta_val = betta_vec[idx];
+      betta_val = betta_vec[i];
     } else {
       betta_val = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
@@ -404,10 +419,11 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
 
     float4 xhat;
     if (means != nullptr) {
-      xhat.x = (inp_val.x - mean_val) * inv_std_dev;
-      xhat.y = (inp_val.y - mean_val) * inv_std_dev;
-      xhat.z = (inp_val.z - mean_val) * inv_std_dev;
-      xhat.w = (inp_val.w - mean_val) * inv_std_dev;
+      float norm_factor = inv_std_dev;
+      xhat.x = (inp_val.x - mean_val) * norm_factor;
+      xhat.y = (inp_val.y - mean_val) * norm_factor;
+      xhat.z = (inp_val.z - mean_val) * norm_factor;
+      xhat.w = (inp_val.w - mean_val) * norm_factor;
     } else {
       xhat.x = (inp_val.x - betta_val.x) / gamma_val.x;
       xhat.y = (inp_val.y - betta_val.y) / gamma_val.y;
@@ -416,11 +432,13 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
     }
 
     float4 final_grad;
-    final_grad.x = (dxhat.x - (shared_dxhat_sum + xhat.x * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
-    final_grad.y = (dxhat.y - (shared_dxhat_sum + xhat.y * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
-    final_grad.z = (dxhat.z - (shared_dxhat_sum + xhat.z * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
-    final_grad.w = (dxhat.w - (shared_dxhat_sum + xhat.w * shared_dxhat_xhat_sum) * scale_factor) * inv_std_dev;
-    inp_grad_vec[idx] = final_grad;
+    float scale_adjustment = shared_dxhat_sum * scale_factor;
+    final_grad.x = (dxhat.x - (scale_adjustment + xhat.x * shared_dxhat_xhat_sum * scale_factor)) * inv_std_dev;
+    final_grad.y = (dxhat.y - (scale_adjustment + xhat.y * shared_dxhat_xhat_sum * scale_factor)) * inv_std_dev;
+    final_grad.z = (dxhat.z - (scale_adjustment + xhat.z * shared_dxhat_xhat_sum * scale_factor)) * inv_std_dev;
+    final_grad.w = (dxhat.w - (scale_adjustment + xhat.w * shared_dxhat_xhat_sum * scale_factor)) * inv_std_dev;
+
+    inp_grad_vec[i] = final_grad;
   }
   /// END ASSIGN3_2
 }

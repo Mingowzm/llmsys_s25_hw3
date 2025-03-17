@@ -349,7 +349,8 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
          samples_per_epoch=20000,
          n_vocab=10000,
          n_embd=256,
-         seed=11111):
+         seed=11111,
+         use_fused_kernel=False):
     """
     The main function to train and evaluate the model on a specified dataset.
 
@@ -363,6 +364,7 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
     - n_vocab: The vocabulary size of the BPE tokenizer.
     - n_embd: The embedding dimension.
     - seed: Random seed.
+    - use_fused_kernel: Whether to use fused kernels for optimization.
     """
 
     np.random.seed(seed)
@@ -373,6 +375,9 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
 
     backend = minitorch.TensorBackend(CudaKernelOps)
 
+    if use_fused_kernel:
+        print("Using fused kernel optimizations...")
+
     config = {
         'n_vocab': n_vocab,  # vocab_size
         'n_embd': n_embd,  # n_embed
@@ -381,7 +386,8 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
         # 'n_layer'     : 4,    # n_layer
         'p_dropout': 0.1,  # x_pdrop
         'ln_eps': 1e-5,  # layer_norm_epsilon
-        'backend': backend
+        'backend': backend,
+        'use_fused_kernel': use_fused_kernel
     }
 
     model = DecoderLM(**config)
@@ -406,6 +412,7 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
         backend=backend)
 
     for epoch_idx in range(n_epochs):
+        epoch_start = time.time()
         desc = f'epoch {epoch_idx} / {n_epochs}'
 
         train_start_time = time.time()
@@ -452,8 +459,11 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
             {'validation_loss': float(validation_loss), **eval_scores},
             open(f'{workdir}/eval_results_epoch{epoch_idx}.json', 'w'))
 
+        epoch_time = time.time() - epoch_start
+
         print(f"Epoch {epoch_idx} Time Breakdown:")
         print(f"Training Time: {train_time:.2f} sec")
+        print(f"Total Epoch Time: {epoch_time:.2f} sec")
 
 
 if __name__ == '__main__':

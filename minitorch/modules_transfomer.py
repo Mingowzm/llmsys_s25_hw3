@@ -246,7 +246,12 @@ class TransformerLayer(Module):
         x_2d = x.view(batch_size * seq_len, n_embd)
 
         if self.use_fused_kernel:
-            x_norm = LayerNorm.apply(x_2d, self.ln_1.weight, self.ln_1.bias)
+            # x_norm = LayerNorm.apply(x_2d, self.ln_1.weight, self.ln_1.bias)
+            x_norm = LayerNorm.apply(
+                x_2d,
+                tensor_from_numpy(self.ln1.weights.value.to_numpy(), backend=self.backend, requires_grad=True),
+                tensor_from_numpy(self.ln1.bias.value.to_numpy(), backend=self.backend, requires_grad=True)
+            )
         else:
             x_norm = self.ln_1(x_2d)
 
@@ -258,7 +263,11 @@ class TransformerLayer(Module):
         x_2d = x.view(batch_size * seq_len, n_embd)
 
         if self.use_fused_kernel:
-            x_norm = LayerNorm.apply(x_2d, self.ln_2.weight, self.ln_2.bias)
+            x_norm = LayerNorm.apply(
+                x_2d,
+                tensor_from_numpy(self.ln2.weights.value.to_numpy(), backend=self.backend, requires_grad=True),
+                tensor_from_numpy(self.ln2.bias.value.to_numpy(), backend=self.backend, requires_grad=True)
+            )
         else:
             x_norm = self.ln_2(x_2d)
 
@@ -358,7 +367,11 @@ class DecoderLM(Module):
         x_2d = x.view(batch_size * seq_len, self.n_embd)
 
         if self.use_fused_kernel:
-            x_norm = LayerNorm.apply(x_2d, self.ln.weight, self.ln.bias)
+            x_norm = LayerNorm.apply(
+                x_2d,
+                tensor_from_numpy(self.ln.weights.value.to_numpy(), backend=self.backend, requires_grad=True),
+                tensor_from_numpy(self.ln.bias.value.to_numpy(), backend=self.backend, requires_grad=True)
+            )
         else:
             x_norm = self.ln(x_2d)
 
