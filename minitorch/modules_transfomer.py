@@ -58,9 +58,9 @@ class MultiHeadAttention(Module):
         self.dropout = Dropout(p_dropout)
         ### END YOUR SOLUTION
 
-    def create_causal_mask(self, seq_len):
+    def create_causal_mask(self, bs, nh, seq_len):
         # Returns a 1x1xTxt triangular causal mask for Q @ K^T (You will implicitly broadcast it to BxHxTxT)
-        mask = -np.finfo(datatype).max * np.triu(np.ones((1, 1, seq_len, seq_len), dtype=datatype), 1)
+        mask = -np.finfo(datatype).max * np.triu(np.ones((bs, nh, seq_len, seq_len), dtype=datatype), 1) # Correct version for Assignment 3.
         return tensor_from_numpy(mask, backend=self.backend)
 
     def project_to_query_key_value(self, x):
@@ -118,13 +118,13 @@ class MultiHeadAttention(Module):
 
         if self.use_fused_kernel:
             if self.causal:
-                mask = self.create_causal_mask(queries_len)
+                mask = self.create_causal_mask(batch_size, num_head, queries_len)
             else:
                 mask = logits.zeros(logits.shape)
             attn = Attn_Softmax.apply(logits, mask)
         else:
             if self.causal:
-                mask = self.create_causal_mask(queries_len)
+                mask = self.create_causal_mask(batch_size, num_head, queries_len)
                 logits = logits + mask
             attn = softmax(logits, dim=3)
 
