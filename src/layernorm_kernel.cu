@@ -18,8 +18,8 @@ struct SumPair {
 };
 
 __device__ SumPair blockReduceSumPair(SumPair val) {
-  val.sum_x = blockReduce<ReduceType::kSum, 1>(&val.sum_x);
-  val.sum_x_squared = blockReduce<ReduceType::kSum, 1>(&val.sum_x_squared);
+  blockReduce<ReduceType::kSum, 1>(&val.sum_x);
+  blockReduce<ReduceType::kSum, 1>(&val.sum_x_squared);
   return val;
 }
 
@@ -70,10 +70,10 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   }
 
   // Step 2
-  SumPair local_sums = {sum_x, sum_x_squared};
-  local_sums = blockReduceSumPair(local_sums);
-  sum_x = local_sums.sum_x;
-  sum_x_squared = local_sums.sum_x_squared;
+  blockReduce<ReduceType::kSum, 1>(&sum_x);
+  __syncthreads();
+  blockReduce<ReduceType::kSum, 1>(&sum_x_squared);
+  __syncthreads();
 
   __shared__ float shared_mean, shared_variance;
   if (threadIdx.x == 0) {
